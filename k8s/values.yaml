@@ -1,0 +1,17 @@
+# values.yaml - Configuración de Kubernetes para el proyecto database
+# Este proyecto se instala de forma independiente (repo autónomo).
+
+# Namespace compartido por los 3 proyectos.
+# DEBE coincidir con NAMESPACE en ep03_ing_devops_backend y ep03_ing_devops_frontend
+NAMESPACE=ep03
+
+# Imagen ECR — la cuenta se resuelve en runtime desde AWS STS (apply.sh),
+# por lo que aquí se deja el placeholder <AWSAccountId>.
+DATABASE_IMAGE=<AWSAccountId>.dkr.ecr.us-east-1.amazonaws.com/ep03-database:latest
+
+# Base de datos
+DATABASE_NAME=ep03
+DATABASE_USER=ep03_user
+DATABASE_PASSWORD_B64=YWx1bW5vc19wYXNz
+DATABASE_PORT=5432
+DATABASE_REPLICAS=1
