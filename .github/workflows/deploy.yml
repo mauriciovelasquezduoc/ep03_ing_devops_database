@@ -24,6 +24,7 @@ env:
   ECR_REPO_DB: ep03-database
   K8S_NAMESPACE: ep03
   DEPLOYMENT_NAME: ep03-database
+  NODEGROUP_NAME: laboratorio-ep03-nodegroup
 
 permissions:
   contents: write
@@ -158,6 +159,49 @@ jobs:
             --region "$AWS_REGION" \
             --name "$EKS_CLUSTER_NAME"
           echo "  Contexto: $(kubectl config current-context)"
+
+      - name: Asegurar nodos Ready (escala el nodegroup si hace falta)
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          NODEGROUP_NAME: ${{ env.NODEGROUP_NAME }}
+        run: |
+          set -euo pipefail
+          READY=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2=="Ready"' | wc -l)
+          if [ "$READY" -ge 1 ]; then
+            echo "  $READY nodo(s) Ready; continuando."
+            exit 0
+          fi
+          echo "  Sin nodos Ready. Escalando nodegroup $NODEGROUP_NAME a desiredSize=1..."
+          NG_STATUS=$(aws eks describe-nodegroup \
+            --cluster-name "$EKS_CLUSTER_NAME" \
+            --nodegroup-name "$NODEGROUP_NAME" \
+            --query 'nodegroup.status' --output text 2>/dev/null || echo "NOT-FOUND")
+          if [ "$NG_STATUS" = "NOT-FOUND" ]; then
+            echo "ERROR: el nodegroup $NODEGROUP_NAME no existe en $EKS_CLUSTER_NAME."
+            exit 1
+          fi
+          echo "  Estado del nodegroup: $NG_STATUS"
+          aws eks update-nodegroup-config \
+            --cluster-name "$EKS_CLUSTER_NAME" \
+            --nodegroup-name "$NODEGROUP_NAME" \
+            --scaling-config minSize=1,desiredSize=1,maxSize=3 \
+            > /dev/null 2>&1 || true
+          echo "  Esperando hasta 15 min a que haya un nodo Ready..."
+          for i in $(seq 1 60); do
+            READY=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2=="Ready"' | wc -l)
+            if [ "$READY" -ge 1 ]; then
+              echo "  Nodo Ready tras $((i*15))s."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "ERROR: no hubo nodos Ready tras 15 min."
+          kubectl get nodes || true
+          aws eks describe-nodegroup --cluster-name "$EKS_CLUSTER_NAME" \
+            --nodegroup-name "$NODEGROUP_NAME" \
+            --query 'nodegroup.{status:status,health:health.issues,scaling:scalingConfig}' --output table || true
+          exit 1
+
 
       - name: Aplicar manifiestos k8s/
         env:
