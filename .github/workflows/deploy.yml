@@ -159,6 +159,20 @@ jobs:
             --name "$EKS_CLUSTER_NAME"
           echo "  Contexto: $(kubectl config current-context)"
 
+      - name: Aplicar manifiestos k8s/
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr-deploy.outputs.registry }}
+          IMAGE_TAG: ${{ needs.versioning.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          echo "  Aplicando manifiestos desde k8s/ (instalacion inicial o actualizacion)..."
+          echo "  Imagen: ${ECR_REGISTRY}/${ECR_REPO_DB}:${IMAGE_TAG}"
+          chmod +x k8s/*.sh
+          # El script crea el namespace y el Secret si no existen (idempotente),
+          # genera los YAML desde values.yaml + templates/ y los aplica.
+          # DATABASE_IMAGE por entorno tiene precedencia sobre values.yaml.
+          DATABASE_IMAGE="${ECR_REGISTRY}/${ECR_REPO_DB}:${IMAGE_TAG}" ./k8s/apply.sh
+
       - name: Forzar recreate de pods por probes nuevas
         run: |
           echo "  Eliminando pods antiguos para forzar recreate con probes actualizadas..."
@@ -168,12 +182,13 @@ jobs:
       - name: Actualizar imagen del deployment
         env:
           ECR_REGISTRY: ${{ steps.login-ecr-deploy.outputs.registry }}
+          IMAGE_TAG: ${{ needs.versioning.outputs.new_tag }}
         run: |
           set -euo pipefail
           echo "  Actualizando deployment/${DEPLOYMENT_NAME}..."
-          echo "  Usando tag: latest"
+          echo "  Usando tag: $IMAGE_TAG"
           kubectl set image "deployment/${DEPLOYMENT_NAME}" \
-            "database=$ECR_REGISTRY/${ECR_REPO_DB}:latest" \
+            "database=$ECR_REGISTRY/${ECR_REPO_DB}:$IMAGE_TAG" \
             -n "$K8S_NAMESPACE"
 
           echo "  Esperando a que el pod esté Ready (máx 5 min)..."
