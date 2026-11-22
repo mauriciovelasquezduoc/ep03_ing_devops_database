@@ -226,57 +226,32 @@ jobs:
           # DATABASE_IMAGE por entorno tiene precedencia sobre values.yaml.
           DATABASE_IMAGE="${ECR_REGISTRY}/${ECR_REPO_DB}:${IMAGE_TAG}" ./k8s/apply.sh
 
-      - name: Forzar recreate de pods por probes nuevas
-        run: |
-          echo "  Eliminando pods antiguos para forzar recreate con probes actualizadas..."
-          kubectl delete pod -n "$K8S_NAMESPACE" -l "app=${ECR_REPO_DB}" --grace-period=0 --force 2>/dev/null || true
-          echo "  Pods eliminados, se recrearán automáticamente"
-
-      - name: Actualizar imagen del deployment
+      - name: Rollout del deployment (espera Ready max 5 min)
         env:
           ECR_REGISTRY: ${{ steps.login-ecr-deploy.outputs.registry }}
           IMAGE_TAG: ${{ needs.versioning.outputs.new_tag }}
         run: |
           set -euo pipefail
-          echo "  Actualizando deployment/${DEPLOYMENT_NAME}..."
-          echo "  Usando tag: $IMAGE_TAG"
+          echo "  Estado actual (deployment / replicaset / pods):"
+          kubectl get deploy,rs,pods -n "$K8S_NAMESPACE" -l "app=${ECR_REPO_DB}" -o wide || true
+          echo "  Actualizando imagen a $IMAGE_TAG..."
           kubectl set image "deployment/${DEPLOYMENT_NAME}" \
             "database=$ECR_REGISTRY/${ECR_REPO_DB}:$IMAGE_TAG" \
             -n "$K8S_NAMESPACE"
-
-          echo "  Esperando a que el pod esté Ready (máx 5 min)..."
-          END=$((SECONDS+300))
-          READY=false
-          while [ $SECONDS -lt $END ]; do
-            POD_INFO=$(kubectl get pods -n "$K8S_NAMESPACE" -l "app=${ECR_REPO_DB}" --no-headers 2>/dev/null | head -1)
-            echo "    Pod status: ${POD_INFO:-sin pods aún}"
-            if echo "$POD_INFO" | grep -qE "[0-9]+\/[0-9]+\s+Running"; then
-              echo "  Todos los pods Ready"
-              READY=true
-              break
-            fi
-            POD_STATUS=$(echo "$POD_INFO" | awk '{print $3}')
-            if echo "$POD_STATUS" | grep -qE "ImagePullBackOff|ErrImagePull|CrashLoopBackOff|Error"; then
-              echo ""
-              echo "==========================================================="
-              echo "  ERROR: El pod entro en estado: $POD_STATUS"
-              echo "==========================================================="
-              kubectl describe pod -n "$K8S_NAMESPACE" -l "app=${ECR_REPO_DB}" || true
-              kubectl logs -n "$K8S_NAMESPACE" -l "app=${ECR_REPO_DB}" --tail=20 || true
-              exit 1
-            fi
-            sleep 10
-          done
-          if [ "$READY" = false ]; then
+          echo "  Esperando rollout (max 5 min)..."
+          if ! kubectl rollout status "deployment/${DEPLOYMENT_NAME}" \
+                 -n "$K8S_NAMESPACE" --timeout=300s; then
             echo ""
             echo "==========================================================="
-            echo "  ERROR: El pod no estuvo Ready tras 5 minutos."
+            echo "  ERROR: rollout no completo en 5 min. Diagnostico:"
             echo "==========================================================="
-            kubectl describe pod -n "$K8S_NAMESPACE" -l "app=${ECR_REPO_DB}" || true
-            kubectl logs -n "$K8S_NAMESPACE" -l "app=${ECR_REPO_DB}" --tail=20 || true
+            kubectl describe deployment "$DEPLOYMENT_NAME" -n "$K8S_NAMESPACE" || true
+            kubectl describe rs -n "$K8S_NAMESPACE" -l "app=${ECR_REPO_DB}" | tail -20 || true
+            kubectl get events -n "$K8S_NAMESPACE" --sort-by=.lastTimestamp | tail -15 || true
             exit 1
           fi
-          echo "  Pod Ready"
+          echo "  Rollout completo. Pods:"
+          kubectl get pods -n "$K8S_NAMESPACE" -l "app=${ECR_REPO_DB}"
 
       - name: Verificar estado final
         run: |
