@@ -137,10 +137,19 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           set -euo pipefail
-          CLUSTER=$(aws eks list-clusters --region "$AWS_REGION" --query 'clusters[0]' --output text)
+          # Preferir el cluster del episodio actual (ep03). Si no existe,
+          # usar el unico cluster disponible y avisar (evita desplegar en un
+          # cluster viejo como laboratorio-ep02-eks por orden alfabetico).
+          CLUSTER=$(aws eks list-clusters --region "$AWS_REGION" \
+            --query "clusters[?contains(@, 'ep03')] | [0]" --output text)
           if [ -z "$CLUSTER" ] || [ "$CLUSTER" = "None" ]; then
-            echo "ERROR: No se encontro ningun cluster EKS en la region $AWS_REGION"
-            exit 1
+            CLUSTER=$(aws eks list-clusters --region "$AWS_REGION" \
+              --query 'clusters[0]' --output text)
+            if [ -z "$CLUSTER" ] || [ "$CLUSTER" = "None" ]; then
+              echo "ERROR: No se encontro ningun cluster EKS en la region $AWS_REGION"
+              exit 1
+            fi
+            echo "ADVERTENCIA: no hay cluster ep03 en la region; usando: $CLUSTER"
           fi
           echo "EKS_CLUSTER_NAME=$CLUSTER" >> "$GITHUB_ENV"
           echo "  Cluster detectado: $CLUSTER"
